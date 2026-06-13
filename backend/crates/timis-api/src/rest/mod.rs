@@ -10,6 +10,7 @@ mod tenants;
 mod upload;
 mod org;
 mod properties;
+pub mod docs;
 
 pub fn router(state: AppState) -> Router {
     Router::new()

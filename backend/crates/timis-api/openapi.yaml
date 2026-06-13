@@ -1,0 +1,1589 @@
+openapi: 3.0.3
+info:
+  title: TIMIS Platform API
+  description: |
+    Complete REST API documentation for the TIMIS Tenancy Information Management System (TIMIS).
+
+    ## Overview
+    TIMIS uses a **hybrid API approach**:
+    - **GraphQL** (`/graphql`) — Primary client-facing API for all CRUD operations
+    - **REST** (`/api/v1/*`) — Webhooks, integrations, and public endpoints documented here
+
+    ## Authentication
+    All protected endpoints require a Bearer JWT token:
+    ```
+    Authorization: Bearer <token>
+    ```
+    Obtain tokens via `POST /api/v1/auth/login` or `POST /api/v1/auth/token`.
+
+    ## Rate Limits
+    | Endpoint Group | Limit |
+    |---------------|-------|
+    | Auth | 5 req/s per IP |
+    | General API | 30 req/s per IP |
+    | M-Pesa callbacks | Unlimited (Safaricom IPs only) |
+    | AI features | 50/day (Free), 200/day (Starter), 1000/day (Pro) |
+
+    ## Environments
+    | Environment | Base URL |
+    |------------|----------|
+    | Production | `https://api.timis.co.ke/api/v1` |
+    | Sandbox | `https://sandbox.timis.co.ke/api/v1` |
+
+    ## Kenya-Specific Notes
+    - All monetary amounts in KES (Kenyan Shillings) unless otherwise specified
+    - Phone numbers in format: `254XXXXXXXXX` (no + prefix)
+    - Dates in ISO 8601 format (EAT timezone: UTC+3)
+
+  version: 1.0.0
+  contact:
+    name: TIMIS Engineering
+    email: api@timis.co.ke
+    url: https://developers.timis.co.ke
+  license:
+    name: BUSL-1.1
+  x-logo:
+    url: https://timis.co.ke/logo.png
+
+externalDocs:
+  description: TIMIS Developer Portal
+  url: https://developers.timis.co.ke
+
+servers:
+  - url: https://api.timis.co.ke/api/v1
+    description: Production
+  - url: https://sandbox.timis.co.ke/api/v1
+    description: Sandbox
+  - url: http://localhost:8080/api/v1
+    description: Local Development
+
+tags:
+  - name: Auth
+    description: Authentication and authorization
+  - name: Tenants
+    description: Tenant onboarding and profile management
+  - name: Properties
+    description: Property, building, and unit management
+  - name: Leases
+    description: Lease lifecycle management
+  - name: Payments
+    description: Rent collection and financial operations
+  - name: M-Pesa
+    description: Safaricom Daraja API integration
+  - name: Timis Score
+    description: Tenant credit/rental scoring
+  - name: Disputes
+    description: Dispute logging and resolution
+  - name: Maintenance
+    description: Maintenance requests and vendor management
+  - name: Communications
+    description: Messaging, notifications, and SMS
+  - name: AI
+    description: Timis Intelligence™ — Claude-powered features
+  - name: Reports
+    description: Analytics and report generation
+  - name: Webhooks
+    description: Inbound webhook endpoints (M-Pesa, SMS, Banks)
+  - name: Health
+    description: Service health and readiness
+
+paths:
+  # ═══════════════════════════════════════
+  # HEALTH
+  # ═══════════════════════════════════════
+  /health:
+    get:
+      tags: [Health]
+      summary: Service health check
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: healthy }
+                  service: { type: string, example: timis-api }
+                  version: { type: string, example: "1.0.0" }
+                  uptime_seconds: { type: integer, example: 86400 }
+
+  /health/ready:
+    get:
+      tags: [Health]
+      summary: Readiness check (DB, Redis, RabbitMQ connectivity)
+      operationId: readinessCheck
+      responses:
+        '200':
+          description: All dependencies connected
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  postgres: { type: string, enum: [ok, error] }
+                  redis: { type: string, enum: [ok, error] }
+                  rabbitmq: { type: string, enum: [ok, error] }
+                  minio: { type: string, enum: [ok, error] }
+
+  # ═══════════════════════════════════════
+  # AUTH
+  # ═══════════════════════════════════════
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email and password
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, example: "landlord@example.com" }
+                password: { type: string, format: password, example: "SecureP@ss123" }
+                org_slug: { type: string, example: "jamii-properties", description: "Required for multi-tenant login" }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '429':
+          description: Too many attempts
+
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register new organization (landlord signup)
+      operationId: register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, first_name, last_name, phone, org_name]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, minLength: 8 }
+                first_name: { type: string, example: "James" }
+                last_name: { type: string, example: "Mwangi" }
+                phone: { type: string, example: "254712345678" }
+                org_name: { type: string, example: "Jamii Properties" }
+                org_slug: { type: string, example: "jamii-properties", description: "Subdomain slug (auto-generated if empty)" }
+      responses:
+        '201':
+          description: Organization created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '409':
+          description: Email or slug already exists
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      operationId: refreshToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        '200':
+          description: New token pair issued
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthResponse' }
+        '401':
+          description: Refresh token expired or revoked
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout (invalidate tokens)
+      operationId: logout
+      security: [{ bearerAuth: [] }]
+      responses:
+        '204':
+          description: Logged out successfully
+
+  /auth/mfa/setup:
+    post:
+      tags: [Auth]
+      summary: Enable MFA (TOTP setup)
+      operationId: setupMfa
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  secret: { type: string, description: "TOTP secret (show QR code)" }
+                  qr_code_url: { type: string }
+
+  /auth/mfa/verify:
+    post:
+      tags: [Auth]
+      summary: Verify MFA code
+      operationId: verifyMfa
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string, example: "123456" }
+      responses:
+        '200':
+          description: MFA verified
+        '401':
+          description: Invalid code
+
+  # ═══════════════════════════════════════
+  # TENANTS
+  # ═══════════════════════════════════════
+  /tenants:
+    get:
+      tags: [Tenants]
+      summary: List tenants
+      operationId: listTenants
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [applicant, active, vacated, blacklisted] } }
+        - { name: search, in: query, schema: { type: string }, description: "Search by name or phone" }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          description: Tenant list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Tenant' } }
+                  total: { type: integer }
+
+    post:
+      tags: [Tenants]
+      summary: Create/onboard a new tenant
+      operationId: createTenant
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTenantRequest' }
+      responses:
+        '201':
+          description: Tenant created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+        '409':
+          description: Phone or ID number already exists
+
+  /tenants/{id}:
+    get:
+      tags: [Tenants]
+      summary: Get tenant by ID
+      operationId: getTenant
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TenantDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+    put:
+      tags: [Tenants]
+      summary: Update tenant profile
+      operationId: updateTenant
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTenantRequest' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tenant' }
+
+  /tenants/{id}/documents:
+    post:
+      tags: [Tenants]
+      summary: Upload tenant document (ID, payslip, etc.)
+      operationId: uploadTenantDocument
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, doc_type]
+              properties:
+                file: { type: string, format: binary }
+                doc_type: { type: string, enum: [id_front, id_back, payslip, bank_statement, employment_letter] }
+      responses:
+        '201':
+          description: Document uploaded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  file_url: { type: string }
+                  doc_type: { type: string }
+
+  # ═══════════════════════════════════════
+  # PROPERTIES & UNITS
+  # ═══════════════════════════════════════
+  /properties:
+    get:
+      tags: [Properties]
+      summary: List properties
+      operationId: listProperties
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Property' } }
+                  total: { type: integer }
+
+    post:
+      tags: [Properties]
+      summary: Create property
+      operationId: createProperty
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreatePropertyRequest' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Property' }
+
+  /properties/{id}/units:
+    get:
+      tags: [Properties]
+      summary: List units in a property
+      operationId: listPropertyUnits
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [vacant, occupied, maintenance, reserved] } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Unit' } }
+
+  /units:
+    post:
+      tags: [Properties]
+      summary: Create unit
+      operationId: createUnit
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUnitRequest' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unit' }
+
+  /units/vacant:
+    get:
+      tags: [Properties]
+      summary: List all vacant units (vacancy dashboard)
+      operationId: listVacantUnits
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Unit' } }
+                  total_vacant: { type: integer }
+
+  # ═══════════════════════════════════════
+  # LEASES
+  # ═══════════════════════════════════════
+  /leases:
+    get:
+      tags: [Leases]
+      summary: List leases
+      operationId: listLeases
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [draft, active, renewal, expired, terminated] } }
+        - { name: tenant_id, in: query, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Lease' } }
+
+    post:
+      tags: [Leases]
+      summary: Create lease
+      operationId: createLease
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateLeaseRequest' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lease' }
+
+  /leases/expiring:
+    get:
+      tags: [Leases]
+      summary: List leases expiring within N days
+      operationId: listExpiringLeases
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: within_days, in: query, required: true, schema: { type: integer, example: 30 } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Lease' } }
+
+  /leases/{id}/activate:
+    post:
+      tags: [Leases]
+      summary: Activate a draft lease
+      operationId: activateLease
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lease' }
+
+  /leases/{id}/terminate:
+    post:
+      tags: [Leases]
+      summary: Terminate an active lease
+      operationId: terminateLease
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, example: "Tenant vacated after notice" }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Lease' }
+
+  # ═══════════════════════════════════════
+  # PAYMENTS & INVOICES
+  # ═══════════════════════════════════════
+  /invoices:
+    get:
+      tags: [Payments]
+      summary: List invoices
+      operationId: listInvoices
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: tenant_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [draft, sent, paid, partial, overdue, cancelled] } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Invoice' } }
+                  total_outstanding_kes: { type: number }
+
+  /payments:
+    get:
+      tags: [Payments]
+      summary: List payments
+      operationId: listPayments
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: tenant_id, in: query, schema: { type: string, format: uuid } }
+        - { name: method, in: query, schema: { type: string, enum: [mpesa, bank_transfer, cash, cheque] } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Payment' } }
+
+    post:
+      tags: [Payments]
+      summary: Record a manual payment (cash/cheque)
+      operationId: recordPayment
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RecordPaymentRequest' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Payment' }
+
+  /payments/arrears:
+    get:
+      tags: [Payments]
+      summary: List tenants with outstanding arrears
+      operationId: listArrears
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: property_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        tenant_id: { type: string, format: uuid }
+                        tenant_name: { type: string }
+                        unit_number: { type: string }
+                        total_arrears_kes: { type: number }
+                        months_overdue: { type: integer }
+
+  # ═══════════════════════════════════════
+  # M-PESA
+  # ═══════════════════════════════════════
+  /mpesa/stk-push:
+    post:
+      tags: [M-Pesa]
+      summary: Initiate M-Pesa STK Push payment
+      description: |
+        Sends an STK Push prompt to the tenant's phone. The tenant enters their M-Pesa PIN
+        to complete payment. Result delivered via callback.
+      operationId: initiateStkPush
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [phone, amount, invoice_id]
+              properties:
+                phone:
+                  type: string
+                  description: "Kenyan phone (254XXXXXXXXX)"
+                  example: "254712345678"
+                amount:
+                  type: integer
+                  minimum: 1
+                  maximum: 150000
+                  description: "Amount in KES"
+                  example: 25000
+                invoice_id:
+                  type: string
+                  format: uuid
+                account_reference:
+                  type: string
+                  description: "Shows on M-Pesa prompt"
+                  example: "RENT-A204-JUN"
+      responses:
+        '200':
+          description: STK Push initiated — tenant will receive prompt
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StkPushResponse' }
+        '400':
+          description: Invalid phone number or amount
+        '502':
+          description: Safaricom Daraja API unavailable
+
+  /mpesa/callback:
+    post:
+      tags: [Webhooks]
+      summary: "[WEBHOOK] M-Pesa STK Push result callback"
+      description: |
+        Called by Safaricom after tenant completes (or cancels) STK Push.
+        **Do not call this endpoint manually.**
+      operationId: mpesaStkCallback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MpesaCallbackPayload' }
+      responses:
+        '200':
+          description: Callback acknowledged
+
+  /mpesa/c2b/validation:
+    post:
+      tags: [Webhooks]
+      summary: "[WEBHOOK] C2B payment validation"
+      description: |
+        Called by Safaricom when a customer initiates a paybill payment.
+        Validates the account number (BillRefNumber) before processing.
+      operationId: mpesaC2bValidation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/C2BValidationPayload' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ResultCode: { type: integer, example: 0 }
+                  ResultDesc: { type: string, example: "Accepted" }
+
+  /mpesa/c2b/confirmation:
+    post:
+      tags: [Webhooks]
+      summary: "[WEBHOOK] C2B payment confirmation"
+      description: Called by Safaricom after successful C2B payment.
+      operationId: mpesaC2bConfirmation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/C2BConfirmationPayload' }
+      responses:
+        '200':
+          description: Payment recorded
+
+  /mpesa/b2c/result:
+    post:
+      tags: [Webhooks]
+      summary: "[WEBHOOK] B2C payout result"
+      description: Called by Safaricom after B2C payout completes.
+      operationId: mpesaB2cResult
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      responses:
+        '200':
+          description: Acknowledged
+
+  # ═══════════════════════════════════════
+  # TIMIS SCORE
+  # ═══════════════════════════════════════
+  /score/{tenant_id}:
+    get:
+      tags: [Timis Score]
+      summary: Get tenant's Timis Score
+      operationId: getTimisScore
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TimisScore' }
+        '404':
+          description: Score not yet calculated
+
+  /score/{tenant_id}/history:
+    get:
+      tags: [Timis Score]
+      summary: Get score change history
+      operationId: getScoreHistory
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: tenant_id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: '#/components/parameters/Limit' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ScoreHistoryEntry' }
+
+  /score/share:
+    post:
+      tags: [Timis Score]
+      summary: Generate shareable score link
+      operationId: shareScore
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                max_access: { type: integer, default: 1, description: "Max times link can be viewed" }
+                expires_in_hours: { type: integer, default: 72 }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  share_url: { type: string, example: "https://timis.co.ke/score/abc123def456" }
+                  expires_at: { type: string, format: date-time }
+
+  /score/view/{token}:
+    get:
+      tags: [Timis Score]
+      summary: View shared score (public, no auth required)
+      operationId: viewSharedScore
+      parameters:
+        - { name: token, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SharedScore' }
+        '404':
+          description: Token invalid or expired
+        '410':
+          description: Maximum view count reached
+
+  # ═══════════════════════════════════════
+  # DISPUTES
+  # ═══════════════════════════════════════
+  /disputes:
+    get:
+      tags: [Disputes]
+      summary: List disputes
+      operationId: listDisputes
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [submitted, acknowledged, under_review, resolved, escalated, closed] } }
+        - { name: category, in: query, schema: { type: string, enum: [deposit, maintenance, rent_increase, eviction, utilities, noise_conduct, other] } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Dispute' } }
+
+    post:
+      tags: [Disputes]
+      summary: Submit a new dispute
+      operationId: submitDispute
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitDisputeRequest' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dispute' }
+
+  /disputes/{id}/document:
+    post:
+      tags: [Disputes]
+      summary: Generate legal document for dispute (AI-powered)
+      operationId: generateDisputeDocument
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doc_type]
+              properties:
+                doc_type:
+                  type: string
+                  enum: [demand_letter, eviction_notice, deposit_refund_request, complaint_letter]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  doc_type: { type: string }
+                  content: { type: string, description: "Generated document text" }
+                  pdf_url: { type: string }
+
+  # ═══════════════════════════════════════
+  # MAINTENANCE
+  # ═══════════════════════════════════════
+  /maintenance:
+    get:
+      tags: [Maintenance]
+      summary: List maintenance requests
+      operationId: listMaintenanceRequests
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [submitted, assigned, in_progress, completed, verified, closed] } }
+        - { name: urgency, in: query, schema: { type: string, enum: [low, medium, high, emergency] } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/MaintenanceRequest' } }
+
+    post:
+      tags: [Maintenance]
+      summary: Submit maintenance request
+      operationId: submitMaintenanceRequest
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubmitMaintenanceRequest' }
+      responses:
+        '201':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceRequest' }
+
+  /maintenance/{id}/assign:
+    post:
+      tags: [Maintenance]
+      summary: Assign maintenance request to vendor
+      operationId: assignMaintenance
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [vendor_id]
+              properties:
+                vendor_id: { type: string, format: uuid }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MaintenanceRequest' }
+
+  # ═══════════════════════════════════════
+  # AI (Timis Intelligence)
+  # ═══════════════════════════════════════
+  /ai/query:
+    post:
+      tags: [AI]
+      summary: Ask Timis Intelligence (all 7 AI features)
+      description: |
+        Unified AI endpoint. Specify the `feature` to invoke:
+        - `legal_assistant` — Ask tenancy law questions (English/Swahili)
+        - `lease_analyzer` — Analyze uploaded lease text
+        - `dispute_advisor` — Get dispute guidance
+        - `anomaly_detection` — Analyze payment patterns
+        - `score_explainer` — Explain score changes
+        - `vacancy_copy` — Generate listing description
+        - `renewal_briefing` — Pre-renewal landlord briefing
+      operationId: aiQuery
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [feature, query]
+              properties:
+                feature:
+                  type: string
+                  enum: [legal_assistant, lease_analyzer, dispute_advisor, anomaly_detection, score_explainer, vacancy_copy, renewal_briefing]
+                query:
+                  type: string
+                  description: "User question or data to analyze"
+                  example: "Can my landlord increase rent mid-lease without notice?"
+                context:
+                  type: object
+                  description: "Additional context (varies by feature)"
+                  properties:
+                    lease_context: { type: string }
+                    category: { type: string }
+                    evidence_summary: { type: string }
+                    location: { type: string }
+                    amenities: { type: string }
+                    old_score: { type: integer }
+                    new_score: { type: integer }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AIResponse' }
+        '429':
+          description: Daily AI quota exceeded
+
+  # ═══════════════════════════════════════
+  # COMMUNICATIONS
+  # ═══════════════════════════════════════
+  /notifications:
+    get:
+      tags: [Communications]
+      summary: List notifications for current user
+      operationId: listNotifications
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: unread_only, in: query, schema: { type: boolean } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Offset' }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: '#/components/schemas/Notification' } }
+                  unread_count: { type: integer }
+
+  /sms/delivery:
+    post:
+      tags: [Webhooks]
+      summary: "[WEBHOOK] Africa's Talking SMS delivery receipt"
+      operationId: smsDeliveryReceipt
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                id: { type: string }
+                status: { type: string, enum: [Success, Sent, Buffered, Rejected, Failed] }
+                phoneNumber: { type: string }
+                failureReason: { type: string }
+      responses:
+        '200':
+          description: Acknowledged
+
+  # ═══════════════════════════════════════
+  # REPORTS
+  # ═══════════════════════════════════════
+  /reports/portfolio:
+    get:
+      tags: [Reports]
+      summary: Portfolio overview (occupancy, arrears, disputes)
+      operationId: portfolioOverview
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PortfolioOverview' }
+
+  /reports/financial:
+    get:
+      tags: [Reports]
+      summary: Financial report (rent collected, expenses, net income)
+      operationId: financialReport
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: property_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinancialReport' }
+
+  /reports/kra-tax:
+    get:
+      tags: [Reports]
+      summary: KRA Rental Income Tax report (2025 Finance Act)
+      description: |
+        Generates monthly rental income tax summary with tiered rates per the 2025 Finance Act:
+        - Up to KES 288,000/year: 10%
+        - KES 288,001–480,000: 25%
+        - Above KES 480,000: 30%
+      operationId: kraTaxReport
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { name: month, in: query, required: true, schema: { type: string, example: "2025-06" } }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/KRATaxReport' }
+
+  /reports/export:
+    post:
+      tags: [Reports]
+      summary: Export report as PDF/Excel/CSV
+      operationId: exportReport
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [report_type, format, from, to]
+              properties:
+                report_type: { type: string, enum: [financial, arrears, occupancy, tax, tenant_list] }
+                format: { type: string, enum: [pdf, xlsx, csv] }
+                property_id: { type: string, format: uuid }
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  download_url: { type: string }
+                  expires_at: { type: string, format: date-time }
+
+  # ═══════════════════════════════════════
+  # KRA eTIMS
+  # ═══════════════════════════════════════
+  /kra/etims/invoice:
+    post:
+      tags: [Reports]
+      summary: Submit invoice to KRA eTIMS
+      operationId: submitEtimsInvoice
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invoice_id]
+              properties:
+                invoice_id: { type: string, format: uuid }
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  etims_number: { type: string }
+                  status: { type: string }
+
+# ═══════════════════════════════════════════════════════════════
+# COMPONENTS
+# ═══════════════════════════════════════════════════════════════
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "JWT token from /auth/login"
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, default: 20, maximum: 100 }
+    Offset:
+      name: offset
+      in: query
+      schema: { type: integer, default: 0 }
+
+  responses:
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        code: { type: string, example: "NOT_FOUND" }
+        message: { type: string, example: "Tenant not found" }
+
+    AuthResponse:
+      type: object
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string }
+        token_type: { type: string, example: "Bearer" }
+        expires_at: { type: string, format: date-time }
+        user:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string }
+            first_name: { type: string }
+            last_name: { type: string }
+            role: { type: string, enum: [super_admin, landlord_admin, property_manager, tenant, maintenance, accountant] }
+            org_id: { type: string, format: uuid }
+
+    Tenant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        first_name: { type: string, example: "Wanjiku" }
+        last_name: { type: string, example: "Kamau" }
+        phone: { type: string, example: "254712345678" }
+        email: { type: string }
+        id_number: { type: string }
+        status: { type: string, enum: [applicant, active, vacated, blacklisted] }
+        timis_score: { type: integer, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    TenantDetail:
+      allOf:
+        - { $ref: '#/components/schemas/Tenant' }
+        - type: object
+          properties:
+            occupation: { type: string }
+            employer_name: { type: string }
+            monthly_income_kes: { type: number }
+            next_of_kin_name: { type: string }
+            next_of_kin_phone: { type: string }
+            documents: { type: array, items: { type: object, properties: { id: { type: string }, doc_type: { type: string }, file_url: { type: string } } } }
+            active_leases: { type: array, items: { $ref: '#/components/schemas/Lease' } }
+
+    CreateTenantRequest:
+      type: object
+      required: [first_name, last_name, phone, id_type, id_number]
+      properties:
+        first_name: { type: string }
+        last_name: { type: string }
+        phone: { type: string, pattern: "^254\\d{9}$" }
+        email: { type: string, format: email }
+        id_type: { type: string, enum: [national_id, passport, alien_id, military_id] }
+        id_number: { type: string }
+        kra_pin: { type: string, pattern: "^[A-Z]\\d{9}[A-Z]$" }
+        occupation: { type: string }
+        employer_name: { type: string }
+        employer_phone: { type: string }
+        monthly_income_kes: { type: number }
+        next_of_kin_name: { type: string }
+        next_of_kin_phone: { type: string }
+        next_of_kin_relation: { type: string }
+
+    Property:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, example: "Sunrise Apartments" }
+        address: { type: string, example: "Tom Mboya St, Nyeri" }
+        city: { type: string, example: "Nyeri" }
+        county: { type: string, example: "Nyeri" }
+        property_type: { type: string, enum: [residential, commercial, mixed] }
+        total_units: { type: integer }
+        occupancy_rate: { type: number, example: 0.85 }
+        created_at: { type: string, format: date-time }
+
+    CreatePropertyRequest:
+      type: object
+      required: [name, address, city, county, property_type]
+      properties:
+        name: { type: string }
+        address: { type: string }
+        city: { type: string }
+        county: { type: string, description: "Kenya county (47 counties)" }
+        property_type: { type: string, enum: [residential, commercial, mixed] }
+        latitude: { type: number }
+        longitude: { type: number }
+        lr_number: { type: string, description: "Land Registry number" }
+
+    Unit:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        unit_number: { type: string, example: "A-204" }
+        floor: { type: integer }
+        unit_type: { type: string, enum: [bedsitter, one_bed, two_bed, three_bed, maisonette, shop, office, stall, warehouse, mixed] }
+        rent_amount_kes: { type: number, example: 25000 }
+        deposit_amount_kes: { type: number }
+        status: { type: string, enum: [vacant, occupied, maintenance, reserved] }
+        amenities: { type: array, items: { type: string } }
+        current_tenant: { type: string, nullable: true }
+
+    CreateUnitRequest:
+      type: object
+      required: [building_id, unit_number, unit_type, rent_amount_kes]
+      properties:
+        building_id: { type: string, format: uuid }
+        unit_number: { type: string }
+        floor: { type: integer }
+        unit_type: { type: string, enum: [bedsitter, one_bed, two_bed, three_bed, maisonette, shop, office, stall] }
+        bedrooms: { type: integer }
+        bathrooms: { type: integer }
+        size_sqm: { type: number }
+        rent_amount_kes: { type: number }
+        deposit_amount_kes: { type: number }
+        service_charge_kes: { type: number }
+        amenities: { type: array, items: { type: string } }
+
+    Lease:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        unit_id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, active, renewal, expired, terminated] }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        rent_amount_kes: { type: number }
+        deposit_amount_kes: { type: number }
+        billing_day: { type: integer }
+        notice_period_days: { type: integer }
+        days_to_expiry: { type: integer, nullable: true }
+        agreement_url: { type: string, nullable: true }
+
+    CreateLeaseRequest:
+      type: object
+      required: [tenant_id, unit_id, start_date, end_date, rent_amount_kes, deposit_amount_kes, billing_day]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        unit_id: { type: string, format: uuid }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        rent_amount_kes: { type: number }
+        deposit_amount_kes: { type: number }
+        billing_day: { type: integer, minimum: 1, maximum: 28 }
+        notice_period_days: { type: integer, default: 30 }
+
+    Invoice:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        invoice_number: { type: string, example: "INV-2025-0042" }
+        tenant_id: { type: string, format: uuid }
+        billing_period_start: { type: string, format: date }
+        billing_period_end: { type: string, format: date }
+        due_date: { type: string, format: date }
+        total_amount_kes: { type: number }
+        paid_amount_kes: { type: number }
+        balance_kes: { type: number }
+        status: { type: string, enum: [draft, sent, paid, partial, overdue, cancelled] }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              charge_type: { type: string }
+              description: { type: string }
+              amount_kes: { type: number }
+
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        tenant_id: { type: string, format: uuid }
+        invoice_id: { type: string, format: uuid, nullable: true }
+        amount_kes: { type: number }
+        method: { type: string, enum: [mpesa, bank_transfer, cash, cheque] }
+        status: { type: string, enum: [pending, confirmed, failed, reversed] }
+        mpesa_receipt_number: { type: string, nullable: true }
+        paid_at: { type: string, format: date-time }
+
+    RecordPaymentRequest:
+      type: object
+      required: [tenant_id, amount_kes, method]
+      properties:
+        tenant_id: { type: string, format: uuid }
+        invoice_id: { type: string, format: uuid }
+        amount_kes: { type: number, minimum: 1 }
+        method: { type: string, enum: [cash, cheque, bank_transfer] }
+        reference: { type: string, description: "Cheque number or bank reference" }
+        notes: { type: string }
+
+    StkPushResponse:
+      type: object
+      properties:
+        checkout_request_id: { type: string }
+        merchant_request_id: { type: string }
+        response_description: { type: string, example: "Success. Request accepted for processing" }
+
+    MpesaCallbackPayload:
+      type: object
+      properties:
+        Body:
+          type: object
+          properties:
+            stkCallback:
+              type: object
+              properties:
+                MerchantRequestID: { type: string }
+                CheckoutRequestID: { type: string }
+                ResultCode: { type: integer }
+                ResultDesc: { type: string }
+                CallbackMetadata:
+                  type: object
+                  properties:
+                    Item:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          Name: { type: string }
+                          Value: {}
+
+    C2BValidationPayload:
+      type: object
+      properties:
+        TransactionType: { type: string }
+        TransID: { type: string }
+        TransTime: { type: string }
+        TransAmount: { type: number }
+        BusinessShortCode: { type: string }
+        BillRefNumber: { type: string, description: "Invoice number or unit reference" }
+        MSISDN: { type: string }
+
+    C2BConfirmationPayload:
+      type: object
+      properties:
+        TransactionType: { type: string }
+        TransID: { type: string }
+        TransTime: { type: string }
+        TransAmount: { type: number }
+        BusinessShortCode: { type: string }
+        BillRefNumber: { type: string }
+        MSISDN: { type: string }
+        FirstName: { type: string }
+
+    TimisScore:
+      type: object
+      properties:
+        tenant_id: { type: string, format: uuid }
+        score: { type: integer, minimum: 0, maximum: 850, example: 742 }
+        band: { type: string, enum: [excellent, good, fair, poor, very_poor] }
+        factors:
+          type: object
+          properties:
+            payment_punctuality: { type: number, example: 92.5 }
+            payment_completeness: { type: number, example: 88.0 }
+            tenancy_duration: { type: number, example: 75.0 }
+            dispute_history: { type: number, example: 95.0 }
+            maintenance_behavior: { type: number, example: 80.0 }
+            vacate_compliance: { type: number, example: 100.0 }
+            reference_quality: { type: number, example: 70.0 }
+        percentile_rank: { type: number, example: 78.5, description: "Top X% in region" }
+        calculated_at: { type: string, format: date-time }
+
+    ScoreHistoryEntry:
+      type: object
+      properties:
+        score: { type: integer }
+        change_amount: { type: integer, example: -12 }
+        change_reason: { type: string, example: "Late payment (8 days) in March 2025" }
+        calculated_at: { type: string, format: date-time }
+
+    SharedScore:
+      type: object
+      properties:
+        tenant_name: { type: string, example: "Wanjiku K." }
+        score: { type: integer }
+        band: { type: string }
+        payment_punctuality: { type: number }
+        tenancy_months: { type: integer }
+        disputes_count: { type: integer }
+        calculated_at: { type: string, format: date-time }
+        disclaimer: { type: string }
+
+    Dispute:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        dispute_number: { type: string, example: "DSP-20250610-001" }
+        tenant_id: { type: string, format: uuid }
+        unit_id: { type: string, format: uuid }
+        category: { type: string, enum: [deposit, maintenance, rent_increase, eviction, utilities, noise_conduct, other] }
+        subject: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [submitted, acknowledged, under_review, resolved, escalated, closed] }
+        filed_by: { type: string, enum: [tenant, landlord] }
+        evidence_urls: { type: array, items: { type: string } }
+        resolution_outcome: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    SubmitDisputeRequest:
+      type: object
+      required: [unit_id, category, subject, description]
+      properties:
+        unit_id: { type: string, format: uuid }
+        category: { type: string, enum: [deposit, maintenance, rent_increase, eviction, utilities, noise_conduct, other] }
+        subject: { type: string, maxLength: 300 }
+        description: { type: string }
+        evidence_urls: { type: array, items: { type: string } }
+
+    MaintenanceRequest:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        request_number: { type: string }
+        unit_id: { type: string, format: uuid }
+        category: { type: string, example: "plumbing" }
+        description: { type: string }
+        urgency: { type: string, enum: [low, medium, high, emergency] }
+        status: { type: string, enum: [submitted, assigned, in_progress, completed, verified, closed] }
+        assigned_vendor: { type: string, nullable: true }
+        cost_kes: { type: number, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    SubmitMaintenanceRequest:
+      type: object
+      required: [unit_id, category, description, urgency]
+      properties:
+        unit_id: { type: string, format: uuid }
+        category: { type: string, enum: [plumbing, electrical, structural, appliance, pest, painting, other] }
+        description: { type: string }
+        urgency: { type: string, enum: [low, medium, high, emergency] }
+        media_urls: { type: array, items: { type: string } }
+
+    AIResponse:
+      type: object
+      properties:
+        content: { type: string, description: "AI-generated response" }
+        feature: { type: string }
+        tokens_used: { type: integer }
+        disclaimer: { type: string, nullable: true }
+
+    Notification:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        body: { type: string }
+        category: { type: string, enum: [payment, maintenance, dispute, lease, score, system] }
+        is_read: { type: boolean }
+        related_type: { type: string, nullable: true }
+        related_id: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    PortfolioOverview:
+      type: object
+      properties:
+        total_properties: { type: integer }
+        total_units: { type: integer }
+        occupancy_rate: { type: number, example: 0.87 }
+        arrears_rate: { type: number, example: 0.12 }
+        maintenance_backlog: { type: integer }
+        active_disputes: { type: integer }
+        total_collected_kes: { type: number }
+        total_expected_kes: { type: number }
+
+    FinancialReport:
+      type: object
+      properties:
+        period_start: { type: string, format: date }
+        period_end: { type: string, format: date }
+        rent_collected: { type: number }
+        rent_expected: { type: number }
+        collection_rate: { type: number }
+        utility_revenue: { type: number }
+        maintenance_costs: { type: number }
+        net_income: { type: number }
+
+    KRATaxReport:
+      type: object
+      properties:
+        period: { type: string, example: "2025-06" }
+        gross_rental_income: { type: number }
+        residential_income: { type: number }
+        commercial_income: { type: number }
+        allowable_expenses: { type: number }
+        taxable_income: { type: number }
+        tax_bracket: { type: string, description: "2025 Finance Act tier" }
+        tax_rate_percent: { type: number }
+        tax_payable: { type: number }
+        filing_deadline: { type: string, format: date }

@@ -26,6 +26,8 @@ async fn main() {
     let app = Router::new()
         .nest("/graphql", graphql::router(state.clone()))
         .nest("/api/v1", rest::router(state.clone()))
+        .route("/docs", get(rest::docs::swagger_ui))
+        .route("/openapi.yaml", get(rest::docs::openapi_spec))
         .route("/health", get(|| async { "ok" }))
         .layer(CorsLayer::permissive())
         .layer(CompressionLayer::new())

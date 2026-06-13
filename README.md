@@ -31,7 +31,9 @@ See `.env.example` for required configuration.
 
 ## License
 
-BUSL-1.1 — see [LICENSE](LICENSE).
+Proprietary and confidential. All rights reserved. See [LICENSE](LICENSE).
+
+Unauthorized use, copying, or distribution is strictly prohibited.
 
 ---
 

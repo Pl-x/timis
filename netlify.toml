@@ -1,0 +1,12 @@
+[build]
+  base = "frontend"
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  NEXT_PUBLIC_API_URL = "https://your-timis-api.onrender.com/api/v1"
+  NEXT_PUBLIC_GRAPHQL_URL = "https://your-timis-api.onrender.com/graphql"
+  NEXT_PUBLIC_WS_URL = "wss://your-timis-api.onrender.com/ws"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"

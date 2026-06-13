@@ -1,7 +1,7 @@
 # Build stage
-FROM rust:1.79-bookworm AS builder
+FROM rust:1.83-bookworm AS builder
 WORKDIR /app
-COPY backend/Cargo.toml backend/Cargo.lock* ./
+COPY backend/Cargo.toml backend/Cargo.lock ./
 COPY backend/crates ./crates
 RUN cargo build --release --bin timis-api --bin timis-worker
 

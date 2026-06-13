@@ -1,0 +1,197 @@
+version: "3.9"
+
+services:
+  # ═══════════════════════════════════════
+  # NGINX — Reverse proxy + TLS + routing
+  # ═══════════════════════════════════════
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - frontend
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # TIMIS API — Rust/Axum backend
+  # ═══════════════════════════════════════
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgres://timis:${POSTGRES_PASSWORD}@postgres:5432/timis
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://timis:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - RUST_LOG=timis_api=debug
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # TIMIS WORKER — Background job processor
+  # ═══════════════════════════════════════
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.worker
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgres://timis:${POSTGRES_PASSWORD}@postgres:5432/timis
+      - REDIS_URL=redis://redis:6379
+      - RABBITMQ_URL=amqp://timis:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      - RUST_LOG=timis_worker=debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # FRONTEND — Next.js SSR
+  # ═══════════════════════════════════════
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.frontend
+    environment:
+      - NEXT_PUBLIC_GRAPHQL_URL=http://api:8080/graphql
+      - NEXT_PUBLIC_API_URL=http://api:8080/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # POSTGRESQL — Primary database
+  # ═══════════════════════════════════════
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=timis
+      - POSTGRES_USER=timis
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-timis_dev_pass}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./database/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U timis"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # MONGODB — Documents, media, audit logs
+  # ═══════════════════════════════════════
+  mongodb:
+    image: mongo:7
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=timis
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASSWORD:-timis_dev_pass}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # REDIS — Cache, sessions, rate limiting
+  # ═══════════════════════════════════════
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD:-timis_dev_pass} --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-timis_dev_pass}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # RABBITMQ — Message queue
+  # ═══════════════════════════════════════
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment:
+      - RABBITMQ_DEFAULT_USER=timis
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-timis_dev_pass}
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+  # ═══════════════════════════════════════
+  # MINIO — S3-compatible object storage
+  # ═══════════════════════════════════════
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=timis
+      - MINIO_ROOT_PASSWORD=${MINIO_PASSWORD:-timis_dev_pass_123}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    networks:
+      - timis-net
+
+volumes:
+  pg_data:
+  mongo_data:
+  redis_data:
+  rabbitmq_data:
+  minio_data:
+
+networks:
+  timis-net:
+    driver: bridge

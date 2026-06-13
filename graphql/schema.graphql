@@ -1,0 +1,684 @@
+# KIRO/TIMIS GraphQL Schema (SDL)
+# Primary API for all client portals
+
+# ═══════════════════════════════════════════════
+# SCALARS
+# ═══════════════════════════════════════════════
+scalar DateTime
+scalar Date
+scalar UUID
+scalar JSON
+scalar Upload
+
+# ═══════════════════════════════════════════════
+# ENUMS
+# ═══════════════════════════════════════════════
+
+enum TenantStatus { APPLICANT ACTIVE VACATED BLACKLISTED }
+enum VettingStatus { PENDING IN_PROGRESS APPROVED REJECTED }
+enum UnitType { BEDSITTER ONE_BED TWO_BED THREE_BED MAISONETTE SHOP OFFICE STALL WAREHOUSE MIXED }
+enum UnitStatus { VACANT OCCUPIED MAINTENANCE RESERVED }
+enum LeaseStatus { DRAFT ACTIVE RENEWAL EXPIRED TERMINATED }
+enum InvoiceStatus { DRAFT SENT PAID PARTIAL OVERDUE CANCELLED }
+enum PaymentMethod { MPESA BANK_TRANSFER CASH CHEQUE CARD }
+enum PaymentStatus { PENDING CONFIRMED FAILED REVERSED }
+enum ChargeType { RENT DEPOSIT WATER ELECTRICITY SERVICE_CHARGE PENALTY OTHER }
+enum DisputeCategory { DEPOSIT MAINTENANCE RENT_INCREASE EVICTION UTILITIES NOISE_CONDUCT OTHER }
+enum DisputeStatus { SUBMITTED ACKNOWLEDGED UNDER_REVIEW RESOLVED ESCALATED CLOSED }
+enum MaintenanceStatus { SUBMITTED ASSIGNED IN_PROGRESS COMPLETED VERIFIED CLOSED }
+enum UrgencyLevel { LOW MEDIUM HIGH EMERGENCY }
+enum MessageChannel { IN_APP SMS EMAIL WHATSAPP }
+enum UserRole { SUPER_ADMIN LANDLORD_ADMIN PROPERTY_MANAGER TENANT MAINTENANCE ACCOUNTANT }
+enum ScoreBand { EXCELLENT GOOD FAIR POOR VERY_POOR }
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 1: TENANT ONBOARDING
+# ═══════════════════════════════════════════════
+
+type Tenant {
+  id: UUID!
+  firstName: String!
+  lastName: String!
+  fullName: String!
+  email: String
+  phone: String!
+  idNumber: String!
+  status: TenantStatus!
+  vettingStatus: VettingStatus!
+  occupation: String
+  employerName: String
+  monthlyIncomeKes: Float
+  nextOfKinName: String
+  nextOfKinPhone: String
+  profilePhotoUrl: String
+  kiroScore: KiroScore
+  leases: [Lease!]!
+  payments(limit: Int, offset: Int): [Payment!]!
+  disputes: [Dispute!]!
+  maintenanceRequests: [MaintenanceRequest!]!
+  notifications(unreadOnly: Boolean): [Notification!]!
+  createdAt: DateTime!
+}
+
+type TenantReference {
+  id: UUID!
+  refereeName: String!
+  refereePhone: String!
+  relationship: String
+  status: VettingStatus!
+  responseNotes: String
+  contactedAt: DateTime
+}
+
+type TenantDocument {
+  id: UUID!
+  docType: String!
+  fileUrl: String!
+  fileName: String
+  uploadedAt: DateTime!
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 2: LEASE & UNIT
+# ═══════════════════════════════════════════════
+
+type Property {
+  id: UUID!
+  name: String!
+  address: String!
+  city: String!
+  county: String!
+  propertyType: String!
+  totalUnits: Int!
+  buildings: [Building!]!
+  occupancyRate: Float!
+  landlordScore: LandlordScore
+  createdAt: DateTime!
+}
+
+type Building {
+  id: UUID!
+  name: String!
+  floors: Int!
+  floorPlanUrl: String
+  units: [Unit!]!
+  property: Property!
+}
+
+type Unit {
+  id: UUID!
+  unitNumber: String!
+  floor: Int
+  unitType: UnitType!
+  bedrooms: Int
+  bathrooms: Int
+  sizeSqm: Float
+  rentAmountKes: Float!
+  depositAmountKes: Float
+  serviceChargeKes: Float
+  status: UnitStatus!
+  amenities: [String!]!
+  currentLease: Lease
+  maintenanceHistory: [MaintenanceRequest!]!
+  building: Building!
+}
+
+type Lease {
+  id: UUID!
+  tenant: Tenant!
+  unit: Unit!
+  status: LeaseStatus!
+  startDate: Date!
+  endDate: Date!
+  rentAmountKes: Float!
+  depositAmountKes: Float!
+  depositPaid: Boolean!
+  billingDay: Int!
+  noticePeriodDays: Int!
+  agreementUrl: String
+  signedAt: DateTime
+  daysToExpiry: Int
+  createdAt: DateTime!
+}
+
+type UnitCondition {
+  id: UUID!
+  conditionType: String!
+  notes: String
+  mediaUrls: [String!]!
+  recordedAt: DateTime!
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 3: FINANCIAL ENGINE
+# ═══════════════════════════════════════════════
+
+type Invoice {
+  id: UUID!
+  lease: Lease!
+  tenant: Tenant!
+  invoiceNumber: String!
+  billingPeriodStart: Date!
+  billingPeriodEnd: Date!
+  dueDate: Date!
+  totalAmountKes: Float!
+  paidAmountKes: Float!
+  balanceKes: Float!
+  status: InvoiceStatus!
+  lines: [InvoiceLine!]!
+  etimsInvoiceNumber: String
+  createdAt: DateTime!
+}
+
+type InvoiceLine {
+  id: UUID!
+  chargeType: ChargeType!
+  description: String!
+  amountKes: Float!
+  quantity: Float!
+}
+
+type Payment {
+  id: UUID!
+  invoice: Invoice
+  tenant: Tenant!
+  amountKes: Float!
+  currency: String!
+  method: PaymentMethod!
+  status: PaymentStatus!
+  mpesaReceiptNumber: String
+  paidAt: DateTime
+  createdAt: DateTime!
+}
+
+type LandlordPayout {
+  id: UUID!
+  property: Property!
+  periodStart: Date!
+  periodEnd: Date!
+  grossCollectedKes: Float!
+  managementFeeKes: Float!
+  expensesKes: Float!
+  netPayoutKes: Float!
+  paidAt: DateTime
+}
+
+type PaymentPlan {
+  id: UUID!
+  tenant: Tenant!
+  totalArrearsKes: Float!
+  installmentAmountKes: Float!
+  installmentsTotal: Int!
+  installmentsPaid: Int!
+  startDate: Date!
+  status: String!
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 4: KIRO SCORE
+# ═══════════════════════════════════════════════
+
+type KiroScore {
+  id: UUID!
+  tenant: Tenant!
+  score: Int!
+  band: ScoreBand!
+  paymentPunctualityScore: Float!
+  paymentCompletenessScore: Float!
+  tenancyDurationScore: Float!
+  disputeHistoryScore: Float!
+  maintenanceBehaviorScore: Float!
+  vacateComplianceScore: Float!
+  referenceQualityScore: Float!
+  history(limit: Int): [ScoreHistoryEntry!]!
+  percentileRank: Float
+  calculatedAt: DateTime!
+}
+
+type ScoreHistoryEntry {
+  score: Int!
+  changeAmount: Int!
+  changeReason: String!
+  calculatedAt: DateTime!
+}
+
+type ScoreShare {
+  id: UUID!
+  shareToken: String!
+  expiresAt: DateTime!
+  accessedCount: Int!
+  maxAccess: Int!
+}
+
+type LandlordScore {
+  id: UUID!
+  score: Int!
+  maintenanceResponseScore: Float!
+  disputeOutcomeScore: Float!
+  evictionComplianceScore: Float!
+  tenantRetentionScore: Float!
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 5: DISPUTES
+# ═══════════════════════════════════════════════
+
+type Dispute {
+  id: UUID!
+  disputeNumber: String!
+  tenant: Tenant!
+  unit: Unit!
+  category: DisputeCategory!
+  subject: String!
+  description: String!
+  status: DisputeStatus!
+  filedBy: String!
+  evidenceUrls: [String!]!
+  timeline: [DisputeTimelineEntry!]!
+  documents: [DisputeDocument!]!
+  resolutionOutcome: String
+  escalatedTo: String
+  resolvedAt: DateTime
+  createdAt: DateTime!
+}
+
+type DisputeTimelineEntry {
+  id: UUID!
+  action: String!
+  actorRole: String
+  notes: String
+  createdAt: DateTime!
+}
+
+type DisputeDocument {
+  id: UUID!
+  docType: String!
+  content: String!
+  generatedBy: String!
+  fileUrl: String
+  createdAt: DateTime!
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 6: MAINTENANCE
+# ═══════════════════════════════════════════════
+
+type MaintenanceRequest {
+  id: UUID!
+  requestNumber: String!
+  tenant: Tenant!
+  unit: Unit!
+  category: String!
+  description: String!
+  urgency: UrgencyLevel!
+  status: MaintenanceStatus!
+  assignedVendor: Vendor
+  mediaUrls: [String!]!
+  completionMediaUrls: [String!]!
+  slaResponseHours: Int
+  slaResolutionHours: Int
+  respondedAt: DateTime
+  completedAt: DateTime
+  costKes: Float
+  tenantRating: Int
+  createdAt: DateTime!
+}
+
+type Vendor {
+  id: UUID!
+  name: String!
+  phone: String!
+  skills: [String!]!
+  avgRating: Float!
+  totalJobs: Int!
+  isActive: Boolean!
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 7: COMMUNICATIONS
+# ═══════════════════════════════════════════════
+
+type Conversation {
+  id: UUID!
+  subject: String
+  messages(limit: Int, offset: Int): [Message!]!
+  participants: [UUID!]!
+  relatedType: String
+  createdAt: DateTime!
+}
+
+type Message {
+  id: UUID!
+  senderId: UUID!
+  content: String!
+  channel: MessageChannel!
+  attachmentUrls: [String!]!
+  isSystem: Boolean!
+  createdAt: DateTime!
+}
+
+type Notification {
+  id: UUID!
+  title: String!
+  body: String!
+  category: String!
+  isRead: Boolean!
+  relatedType: String
+  relatedId: UUID
+  createdAt: DateTime!
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 8: AI
+# ═══════════════════════════════════════════════
+
+type AIResponse {
+  content: String!
+  feature: String!
+  tokensUsed: Int
+  disclaimer: String
+}
+
+# ═══════════════════════════════════════════════
+# TYPES — MODULE 9: REPORTING
+# ═══════════════════════════════════════════════
+
+type PortfolioOverview {
+  totalProperties: Int!
+  totalUnits: Int!
+  occupancyRate: Float!
+  arrearsRate: Float!
+  maintenanceBacklog: Int!
+  activeDisputes: Int!
+  totalCollectedKes: Float!
+  totalExpectedKes: Float!
+}
+
+type FinancialReport {
+  periodStart: Date!
+  periodEnd: Date!
+  rentCollected: Float!
+  rentExpected: Float!
+  utilityRevenue: Float!
+  maintenanceCosts: Float!
+  netIncome: Float!
+  collectionRate: Float!
+}
+
+type KRATaxReport {
+  period: String!
+  grossRentalIncome: Float!
+  allowableExpenses: Float!
+  taxableIncome: Float!
+  taxRate: Float!
+  taxPayable: Float!
+}
+
+# ═══════════════════════════════════════════════
+# INPUTS
+# ═══════════════════════════════════════════════
+
+input CreateTenantInput {
+  firstName: String!
+  lastName: String!
+  phone: String!
+  email: String
+  idType: String!
+  idNumber: String!
+  occupation: String
+  employerName: String
+  monthlyIncomeKes: Float
+  nextOfKinName: String
+  nextOfKinPhone: String
+  nextOfKinRelation: String
+}
+
+input CreatePropertyInput {
+  name: String!
+  address: String!
+  city: String!
+  county: String!
+  propertyType: String!
+  latitude: Float
+  longitude: Float
+}
+
+input CreateUnitInput {
+  buildingId: UUID!
+  unitNumber: String!
+  floor: Int
+  unitType: UnitType!
+  rentAmountKes: Float!
+  depositAmountKes: Float
+  serviceChargeKes: Float
+  amenities: [String!]
+}
+
+input CreateLeaseInput {
+  tenantId: UUID!
+  unitId: UUID!
+  startDate: Date!
+  endDate: Date!
+  rentAmountKes: Float!
+  depositAmountKes: Float!
+  billingDay: Int!
+  noticePeriodDays: Int
+}
+
+input RecordPaymentInput {
+  tenantId: UUID!
+  invoiceId: UUID
+  amountKes: Float!
+  method: PaymentMethod!
+  mpesaReceiptNumber: String
+  bankReference: String
+}
+
+input InitiateMpesaPaymentInput {
+  tenantId: UUID!
+  invoiceId: UUID!
+  phone: String!
+  amountKes: Float!
+}
+
+input SubmitDisputeInput {
+  tenantId: UUID!
+  unitId: UUID!
+  category: DisputeCategory!
+  subject: String!
+  description: String!
+  filedBy: String!
+  evidenceUrls: [String!]
+}
+
+input SubmitMaintenanceInput {
+  tenantId: UUID!
+  unitId: UUID!
+  category: String!
+  description: String!
+  urgency: UrgencyLevel!
+  mediaUrls: [String!]
+}
+
+input SendMessageInput {
+  conversationId: UUID
+  recipientId: UUID
+  content: String!
+  channel: MessageChannel
+}
+
+input AIQueryInput {
+  feature: String!
+  query: String!
+  context: JSON
+}
+
+input DateRangeInput {
+  start: Date!
+  end: Date!
+}
+
+# ═══════════════════════════════════════════════
+# QUERIES
+# ═══════════════════════════════════════════════
+
+type Query {
+  # Tenants
+  tenant(id: UUID!): Tenant
+  tenants(status: TenantStatus, search: String, limit: Int, offset: Int): [Tenant!]!
+  tenantByPhone(phone: String!): Tenant
+
+  # Properties & Units
+  property(id: UUID!): Property
+  properties(limit: Int, offset: Int): [Property!]!
+  unit(id: UUID!): Unit
+  units(buildingId: UUID, status: UnitStatus, unitType: UnitType, maxRent: Float, limit: Int, offset: Int): [Unit!]!
+  vacantUnits(propertyId: UUID): [Unit!]!
+
+  # Leases
+  lease(id: UUID!): Lease
+  leases(tenantId: UUID, unitId: UUID, status: LeaseStatus, limit: Int, offset: Int): [Lease!]!
+  expiringLeases(withinDays: Int!): [Lease!]!
+
+  # Financial
+  invoice(id: UUID!): Invoice
+  invoices(tenantId: UUID, status: InvoiceStatus, dateRange: DateRangeInput, limit: Int, offset: Int): [Invoice!]!
+  payments(tenantId: UUID, method: PaymentMethod, dateRange: DateRangeInput, limit: Int, offset: Int): [Payment!]!
+  arrears(propertyId: UUID): [Invoice!]!
+  payouts(propertyId: UUID!, dateRange: DateRangeInput): [LandlordPayout!]!
+
+  # Kiro Score
+  kiroScore(tenantId: UUID!): KiroScore
+  scoreHistory(tenantId: UUID!, limit: Int): [ScoreHistoryEntry!]!
+  scoreByToken(token: String!): KiroScore
+
+  # Disputes
+  dispute(id: UUID!): Dispute
+  disputes(tenantId: UUID, unitId: UUID, status: DisputeStatus, category: DisputeCategory, limit: Int, offset: Int): [Dispute!]!
+
+  # Maintenance
+  maintenanceRequest(id: UUID!): MaintenanceRequest
+  maintenanceRequests(unitId: UUID, status: MaintenanceStatus, urgency: UrgencyLevel, limit: Int, offset: Int): [MaintenanceRequest!]!
+  vendors(skills: [String!], limit: Int): [Vendor!]!
+
+  # Communications
+  conversations(limit: Int, offset: Int): [Conversation!]!
+  conversation(id: UUID!): Conversation
+  notifications(unreadOnly: Boolean, limit: Int, offset: Int): [Notification!]!
+  unreadCount: Int!
+
+  # Reports
+  portfolioOverview: PortfolioOverview!
+  financialReport(propertyId: UUID, dateRange: DateRangeInput!): FinancialReport!
+  kraTaxReport(period: String!): KRATaxReport!
+
+  # Auth
+  me: User!
+}
+
+type User {
+  id: UUID!
+  email: String!
+  firstName: String!
+  lastName: String!
+  role: UserRole!
+  orgId: UUID!
+  mfaEnabled: Boolean!
+}
+
+# ═══════════════════════════════════════════════
+# MUTATIONS
+# ═══════════════════════════════════════════════
+
+type Mutation {
+  # Auth
+  login(email: String!, password: String!): AuthPayload!
+  refreshToken(refreshToken: String!): AuthPayload!
+  enableMfa: MfaSetup!
+  verifyMfa(code: String!): Boolean!
+
+  # Tenants
+  createTenant(input: CreateTenantInput!): Tenant!
+  updateTenant(id: UUID!, input: CreateTenantInput!): Tenant!
+  approveTenantVetting(tenantId: UUID!): Tenant!
+  rejectTenantVetting(tenantId: UUID!, reason: String!): Tenant!
+
+  # Properties & Units
+  createProperty(input: CreatePropertyInput!): Property!
+  createBuilding(propertyId: UUID!, name: String!, floors: Int!): Building!
+  createUnit(input: CreateUnitInput!): Unit!
+  updateUnitRent(unitId: UUID!, newRentKes: Float!): Unit!
+
+  # Leases
+  createLease(input: CreateLeaseInput!): Lease!
+  activateLease(leaseId: UUID!): Lease!
+  terminateLease(leaseId: UUID!, reason: String!): Lease!
+  renewLease(leaseId: UUID!, newEndDate: Date!, newRentKes: Float!): Lease!
+
+  # Payments
+  recordPayment(input: RecordPaymentInput!): Payment!
+  initiateMpesaPayment(input: InitiateMpesaPaymentInput!): MpesaInitiation!
+  createPaymentPlan(tenantId: UUID!, installmentAmount: Float!, installments: Int!): PaymentPlan!
+
+  # Disputes
+  submitDispute(input: SubmitDisputeInput!): Dispute!
+  acknowledgeDispute(disputeId: UUID!): Dispute!
+  resolveDispute(disputeId: UUID!, outcome: String!, notes: String!): Dispute!
+  escalateDispute(disputeId: UUID!, escalateTo: String!): Dispute!
+  generateDisputeDocument(disputeId: UUID!, docType: String!): DisputeDocument!
+
+  # Maintenance
+  submitMaintenanceRequest(input: SubmitMaintenanceInput!): MaintenanceRequest!
+  assignMaintenance(requestId: UUID!, vendorId: UUID!): MaintenanceRequest!
+  completeMaintenance(requestId: UUID!, costKes: Float!, mediaUrls: [String!]!): MaintenanceRequest!
+  verifyMaintenance(requestId: UUID!, rating: Int!, feedback: String): MaintenanceRequest!
+
+  # Communications
+  sendMessage(input: SendMessageInput!): Message!
+  sendBroadcast(propertyId: UUID, buildingId: UUID, subject: String!, content: String!, channels: [MessageChannel!]!): Boolean!
+  markNotificationRead(notificationId: UUID!): Boolean!
+  markAllNotificationsRead: Boolean!
+
+  # AI
+  askAI(input: AIQueryInput!): AIResponse!
+
+  # Score
+  shareKiroScore(tenantId: UUID!, maxAccess: Int, expiresInHours: Int): ScoreShare!
+
+  # Reports
+  exportReport(reportType: String!, propertyId: UUID, dateRange: DateRangeInput!, format: String!): String! # Returns download URL
+}
+
+# ═══════════════════════════════════════════════
+# SUBSCRIPTIONS
+# ═══════════════════════════════════════════════
+
+type Subscription {
+  paymentReceived(tenantId: UUID): Payment!
+  maintenanceUpdated(unitId: UUID): MaintenanceRequest!
+  disputeUpdated(disputeId: UUID): Dispute!
+  newNotification: Notification!
+  scoreChanged(tenantId: UUID!): KiroScore!
+}
+
+# ═══════════════════════════════════════════════
+# AUTH TYPES
+# ═══════════════════════════════════════════════
+
+type AuthPayload {
+  accessToken: String!
+  refreshToken: String!
+  user: User!
+  expiresAt: DateTime!
+}
+
+type MfaSetup {
+  secret: String!
+  qrCodeUrl: String!
+}
+
+type MpesaInitiation {
+  checkoutRequestId: String!
+  merchantRequestId: String!
+  responseDescription: String!
+}

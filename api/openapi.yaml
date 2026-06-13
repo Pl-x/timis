@@ -1,0 +1,576 @@
+openapi: 3.0.3
+info:
+  title: TIMIS Platform REST API
+  description: |
+    External/webhook REST endpoints for TIMIS property management platform.
+    Primary client interface is GraphQL — this API serves webhooks (M-Pesa, SMS, banks)
+    and external integrations (KRA eTIMS, property listing platforms).
+  version: 1.0.0
+  contact:
+    name: TIMIS Engineering
+    email: api@timis.co.ke
+    url: https://developers.timis.co.ke
+  license:
+    name: BUSL-1.1
+
+servers:
+  - url: https://api.timis.co.ke/api/v1
+    description: Production
+  - url: https://sandbox.timis.co.ke/api/v1
+    description: Sandbox
+
+tags:
+  - name: Health
+    description: Service health checks
+  - name: M-Pesa
+    description: Safaricom Daraja API webhooks
+  - name: SMS
+    description: Africa's Talking delivery webhooks
+  - name: Payments
+    description: Bank payment notifications
+  - name: KRA
+    description: KRA iTax/eTIMS integration
+  - name: Listings
+    description: Property listing platform webhooks
+  - name: Auth
+    description: OAuth token endpoints
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: healthy
+                  service:
+                    type: string
+                    example: timis-api
+                  version:
+                    type: string
+                    example: "1.0.0"
+
+  /auth/token:
+    post:
+      tags: [Auth]
+      summary: Get access token (OAuth 2.0 client credentials)
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type, client_id, client_secret]
+              properties:
+                grant_type:
+                  type: string
+                  enum: [client_credentials]
+                client_id:
+                  type: string
+                client_secret:
+                  type: string
+      responses:
+        '200':
+          description: Token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /mpesa/stk-push:
+    post:
+      tags: [M-Pesa]
+      summary: Initiate STK Push payment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StkPushRequest'
+      responses:
+        '200':
+          description: STK Push initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StkPushResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '502':
+          description: Safaricom API unavailable
+
+  /mpesa/callback:
+    post:
+      tags: [M-Pesa]
+      summary: M-Pesa STK Push result callback (called by Safaricom)
+      description: |
+        Webhook endpoint registered with Safaricom Daraja. Receives payment
+        confirmation or failure after STK Push. HMAC signature validated.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MpesaCallback'
+      responses:
+        '200':
+          description: Callback acknowledged
+
+  /mpesa/c2b/validation:
+    post:
+      tags: [M-Pesa]
+      summary: C2B payment validation (called by Safaricom)
+      description: |
+        Validates incoming C2B paybill payments. Returns acceptance or rejection.
+        Used to verify account number (invoice/unit reference) before payment processes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/C2BValidation'
+      responses:
+        '200':
+          description: Validation response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ResultCode:
+                    type: integer
+                    example: 0
+                  ResultDesc:
+                    type: string
+                    example: Accepted
+
+  /mpesa/c2b/confirmation:
+    post:
+      tags: [M-Pesa]
+      summary: C2B payment confirmation (called by Safaricom)
+      description: Confirms successful C2B payment. Records payment, updates invoice, triggers notifications.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/C2BConfirmation'
+      responses:
+        '200':
+          description: Confirmation acknowledged
+
+  /sms/delivery:
+    post:
+      tags: [SMS]
+      summary: SMS delivery receipt webhook (Africa's Talking)
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  description: AT message ID
+                status:
+                  type: string
+                  enum: [Success, Sent, Buffered, Rejected, Failed]
+                phoneNumber:
+                  type: string
+                failureReason:
+                  type: string
+      responses:
+        '200':
+          description: Receipt acknowledged
+
+  /payments/bank/equity:
+    post:
+      tags: [Payments]
+      summary: Equity Bank payment notification webhook
+      security:
+        - hmacAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BankPaymentNotification'
+      responses:
+        '200':
+          description: Notification processed
+
+  /payments/bank/kcb:
+    post:
+      tags: [Payments]
+      summary: KCB Bank payment notification webhook
+      security:
+        - hmacAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BankPaymentNotification'
+      responses:
+        '200':
+          description: Notification processed
+
+  /kra/etims/invoice:
+    post:
+      tags: [KRA]
+      summary: Submit invoice to KRA eTIMS
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EtimsInvoice'
+      responses:
+        '200':
+          description: Invoice submitted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  etimsNumber:
+                    type: string
+                  status:
+                    type: string
+
+  /kra/rental-income-report:
+    get:
+      tags: [KRA]
+      summary: Generate monthly rental income tax report (2025 Finance Act)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "2025-06"
+        - name: property_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Tax report generated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RentalIncomeReport'
+
+  /listings/webhook:
+    post:
+      tags: [Listings]
+      summary: Property listing platform inquiry webhook
+      description: Receives inquiries from BuyRentKenya, PigiaMe, etc.
+      security:
+        - hmacAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ListingInquiry'
+      responses:
+        '200':
+          description: Inquiry received
+
+  /score/{token}:
+    get:
+      tags: [Score]
+      summary: View shared Timis Score (public, one-time link)
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Score data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SharedScore'
+        '404':
+          description: Token expired or invalid
+        '410':
+          description: Max access count reached
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    hmacAuth:
+      type: apiKey
+      in: header
+      name: X-Signature
+      description: HMAC-SHA256 signature of request body
+
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+
+    TokenResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          example: Bearer
+        expires_in:
+          type: integer
+          example: 3600
+
+    StkPushRequest:
+      type: object
+      required: [phone, amount, invoice_id]
+      properties:
+        phone:
+          type: string
+          description: "Kenyan phone number (254...)"
+          example: "254712345678"
+        amount:
+          type: integer
+          minimum: 1
+          description: Amount in KES
+          example: 25000
+        invoice_id:
+          type: string
+          format: uuid
+        account_reference:
+          type: string
+          description: "Displayed on STK prompt"
+          example: "RENT-A204-JUN"
+
+    StkPushResponse:
+      type: object
+      properties:
+        checkout_request_id:
+          type: string
+        merchant_request_id:
+          type: string
+        response_description:
+          type: string
+
+    MpesaCallback:
+      type: object
+      properties:
+        Body:
+          type: object
+          properties:
+            stkCallback:
+              type: object
+              properties:
+                MerchantRequestID:
+                  type: string
+                CheckoutRequestID:
+                  type: string
+                ResultCode:
+                  type: integer
+                ResultDesc:
+                  type: string
+                CallbackMetadata:
+                  type: object
+                  properties:
+                    Item:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          Name:
+                            type: string
+                          Value:
+                            type: string
+
+    C2BValidation:
+      type: object
+      properties:
+        TransactionType:
+          type: string
+        TransID:
+          type: string
+        TransTime:
+          type: string
+        TransAmount:
+          type: number
+        BusinessShortCode:
+          type: string
+        BillRefNumber:
+          type: string
+          description: "Invoice number or unit reference"
+        MSISDN:
+          type: string
+
+    C2BConfirmation:
+      type: object
+      properties:
+        TransactionType:
+          type: string
+        TransID:
+          type: string
+        TransTime:
+          type: string
+        TransAmount:
+          type: number
+        BusinessShortCode:
+          type: string
+        BillRefNumber:
+          type: string
+        MSISDN:
+          type: string
+        FirstName:
+          type: string
+
+    BankPaymentNotification:
+      type: object
+      properties:
+        transaction_id:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+          example: KES
+        account_number:
+          type: string
+        sender_name:
+          type: string
+        bank:
+          type: string
+          enum: [equity, kcb, coop]
+        timestamp:
+          type: string
+          format: date-time
+
+    EtimsInvoice:
+      type: object
+      properties:
+        invoice_number:
+          type: string
+        buyer_pin:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              description:
+                type: string
+              amount:
+                type: number
+              tax_code:
+                type: string
+
+    RentalIncomeReport:
+      type: object
+      properties:
+        period:
+          type: string
+        gross_rental_income:
+          type: number
+        residential_income:
+          type: number
+        commercial_income:
+          type: number
+        allowable_expenses:
+          type: number
+        taxable_income:
+          type: number
+        tax_bracket:
+          type: string
+          description: "2025 Finance Act tiered rate"
+        tax_payable:
+          type: number
+        filing_deadline:
+          type: string
+          format: date
+
+    ListingInquiry:
+      type: object
+      properties:
+        source:
+          type: string
+          enum: [buyrentkenya, pigiame, jumia_house]
+        unit_reference:
+          type: string
+        inquirer_name:
+          type: string
+        inquirer_phone:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    SharedScore:
+      type: object
+      properties:
+        tenant_name:
+          type: string
+          description: "First name + last initial"
+        score:
+          type: integer
+          minimum: 0
+          maximum: 850
+        band:
+          type: string
+          enum: [excellent, good, fair, poor, very_poor]
+        payment_punctuality:
+          type: number
+        tenancy_months:
+          type: integer
+        disputes_count:
+          type: integer
+        calculated_at:
+          type: string
+          format: date-time
+        disclaimer:
+          type: string
+          example: "This score is provided by TIMIS and reflects rental history on the platform only."

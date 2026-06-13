@@ -1,0 +1,15 @@
+[package]
+name = "timis-auth"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+timis-core = { path = "../timis-core" }
+jsonwebtoken = { workspace = true }
+argon2 = { workspace = true }
+totp-rs = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

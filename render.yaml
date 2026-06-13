@@ -1,0 +1,72 @@
+services:
+  # Backend API
+  - type: web
+    name: timis-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: timis-api
+    region: frankfurt
+    plan: starter
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        value: timis
+      - key: AI_PROVIDER
+        value: groq
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: llama-3.1-8b-instant
+      - key: AI_BASE_URL
+        value: https://api.groq.com/openai/v1
+      - key: RUST_LOG
+        value: timis_api=info
+
+  # Background Worker
+  - type: worker
+    name: timis-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: timis-worker
+    region: frankfurt
+    plan: starter
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: RUST_LOG
+        value: timis_worker=info
+
+  # Frontend
+  - type: web
+    name: timis-frontend
+    runtime: docker
+    dockerfilePath: ./Dockerfile.frontend
+    region: frankfurt
+    plan: starter
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        fromService:
+          name: timis-api
+          type: web
+          property: host
+          prefix: https://
+          suffix: /api/v1
+      - key: NEXT_PUBLIC_GRAPHQL_URL
+        fromService:
+          name: timis-api
+          type: web
+          property: host
+          prefix: https://
+          suffix: /graphql

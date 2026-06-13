@@ -1,0 +1,12 @@
+[package]
+name = "timis-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+timis-core = { path = "../timis-core" }
+sqlx = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

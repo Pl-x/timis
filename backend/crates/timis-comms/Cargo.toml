@@ -1,0 +1,12 @@
+[package]
+name = "timis-comms"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+timis-core = { path = "../timis-core" }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }

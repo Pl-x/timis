@@ -1,0 +1,64 @@
+[workspace]
+members = [
+    "crates/timis-api",
+    "crates/timis-worker",
+    "crates/timis-core",
+    "crates/timis-db",
+    "crates/timis-auth",
+    "crates/timis-mpesa",
+    "crates/timis-ai",
+    "crates/timis-comms",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "BUSL-1.1"
+authors = ["TIMIS PropTech <dev@timis.co.ke>"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.40", features = ["full"] }
+# Web framework
+axum = { version = "0.7", features = ["ws", "multipart"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = { version = "0.5", features = ["full"] }
+tower-http = { version = "0.5", features = ["cors", "compression-br", "trace", "limit"] }
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+# GraphQL
+async-graphql = { version = "7.0", features = ["uuid", "chrono", "dataloader"] }
+async-graphql-axum = "7.0"
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+# Auth
+jsonwebtoken = "9.3"
+argon2 = "0.5"
+totp-rs = { version = "5.6", features = ["gen_secret"] }
+# HTTP client (for M-Pesa, Claude, Africa's Talking)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+# Redis
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tls-native-tls", "tokio-native-tls-comp"] }
+# RabbitMQ
+lapin = "2.5"
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+# UUID
+uuid = { version = "1.10", features = ["v4", "serde"] }
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+# Config
+config = "0.14"
+dotenvy = "0.15"
+# Encryption
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+hmac = "0.12"
+sha2 = "0.10"
